@@ -25,6 +25,13 @@ public final class BatchDownloader {
     /** 整点音乐文件总数（进度分母，统一为实际遍历数 316）。 */
     public static final int TOTAL_HOURLY = 316;
 
+    /**
+     * 整点音乐总数展示值（界面文案 totalFiles）。与遍历数不同：
+     * 上游桌面版 UI 展示 294（某些变体未实际生成完整 24 小时）。
+     * 仅用于文案展示，不影响下载遍历/进度逻辑。
+     */
+    public static final int DISPLAY_TOTAL_HOURLY = 294;
+
     /** K.K. 音乐文件总数（进度分母）。 */
     public static final int TOTAL_KK = 193;
 

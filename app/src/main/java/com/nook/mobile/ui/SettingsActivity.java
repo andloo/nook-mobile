@@ -370,11 +370,11 @@ public final class SettingsActivity extends AppCompatActivity {
         ((Button) findViewById(R.id.btnClearData)).setText(i18n.tr("clear local files and settings"));
     }
 
-    /** 离线计数文案（trf 占位符，分母统一 316 / 193，FR-42 决策）。 */
+    /** 离线计数文案（trf 占位符；整点展示分母 294、K.K. 193，下载逻辑仍按 316 遍历）。 */
     private void renderCounts() {
         Map<String, String> hourly = new HashMap<>();
         hourly.put("offlineFiles", String.valueOf(settings.countOfflineHourly()));
-        hourly.put("totalFiles", String.valueOf(BatchDownloader.TOTAL_HOURLY));
+        hourly.put("totalFiles", String.valueOf(BatchDownloader.DISPLAY_TOTAL_HOURLY));
         ((TextView) findViewById(R.id.txtHourlyCount)).setText(
                 i18n.trf("{{offlineFiles}}/{{totalFiles}} offline hourly music files downloaded", hourly));
 
