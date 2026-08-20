@@ -32,6 +32,13 @@ public final class BatchDownloader {
     private static final long THROTTLE_MS = 1000;
     private static final int MAX_RETRIES = 2;       // 每个文件最多额外重试 2 次
 
+    /** processFile 返回档位：资源缺失（如 CDN 上 403/404），跳过但不累计熔断失败。 */
+    private static final long RESULT_MISSING = -2;
+    /** processFile 返回档位：真实失败（网络/磁盘等），计入熔断失败数。 */
+    private static final long RESULT_FAIL = -1;
+    /** processFile 返回档位：本地缓存命中，跳过。 */
+    private static final long RESULT_CACHED = 0;
+
     /** 最近一次下载失败明细（供 UI/日志诊断）。 */
     private final List<Failure> recentFailures = new ArrayList<>();
 
@@ -121,7 +128,7 @@ public final class BatchDownloader {
                     return;
                 }
                 if (errs >= FAIL_THRESHOLD) {
-                    logBreach("hourly");
+                    logBreach("hourly", done, TOTAL_HOURLY);
                     if (listener != null) {
                         listener.onFailed();
                     }
@@ -131,10 +138,18 @@ public final class BatchDownloader {
 
                 String hour = isPocketCamp ? PC_HOURS[i] : HOURS[i];
                 String url = UrlBuilder.buildHourlyUrl(game, hour);
+                // 每文件打印「进度序号 + 文件标识」，便于把 UI 上的 N/316 对到具体文件来定位失败
+                Log.d(TAG, "[hourly #" + done + "/" + TOTAL_HOURLY + "] " + (isPocketCamp ? "pocket-camp" : game) + " '" + hour + "' " + url);
                 delay = processFile(url, false, listener, delay);
-                if (delay < 0) {
-                    // 负值编码为“本文件失败”，恢复为下载节流
+                if (delay == RESULT_FAIL) {
+                    // 真实失败：累计熔断失败数
                     errs++;
+                    // 高亮失败的序号与文件，配合熔断日志定位持续失败的具体文件
+                    Log.e(TAG, "[hourly FAIL #" + done + "/" + TOTAL_HOURLY + "] " + url);
+                    delay = THROTTLE_MS;
+                } else if (delay == RESULT_MISSING) {
+                    // 资源缺失：跳过但不熔断，避免单个缺失文件中断整批有效下载
+                    Log.w(TAG, "[hourly MISSING #" + done + "/" + TOTAL_HOURLY + "] " + url);
                     delay = THROTTLE_MS;
                 }
 
@@ -158,7 +173,7 @@ public final class BatchDownloader {
                 return;
             }
             if (errs >= FAIL_THRESHOLD) {
-                logBreach("kk");
+                logBreach("kk", done, TOTAL_KK);
                 if (listener != null) {
                     listener.onFailed();
                 }
@@ -167,9 +182,17 @@ public final class BatchDownloader {
             }
 
             String url = UrlBuilder.buildKkUrl(song);
+            // 每文件打印「进度序号 + 歌曲」，便于把 UI 上的 N/193 对到具体歌曲来定位失败
+            Log.d(TAG, "[kk #" + done + "/" + TOTAL_KK + "] '" + song + "' " + url);
             delay = processFile(url, true, listener, delay);
-            if (delay < 0) {
+            if (delay == RESULT_FAIL) {
                 errs++;
+                // 高亮失败的序号与歌曲，配合熔断日志定位持续失败的具体文件
+                Log.e(TAG, "[kk FAIL #" + done + "/" + TOTAL_KK + "] '" + song + "' " + url);
+                delay = THROTTLE_MS;
+            } else if (delay == RESULT_MISSING) {
+                // 资源缺失：跳过但不熔断，避免单个缺失歌曲中断整批有效下载
+                Log.w(TAG, "[kk MISSING #" + done + "/" + TOTAL_KK + "] '" + song + "' " + url);
                 delay = THROTTLE_MS;
             }
 
@@ -182,28 +205,34 @@ public final class BatchDownloader {
     }
 
     /**
-     * 处理单个文件：先按上一步节流休眠；若本地 meta 已存在则跳过（返回 0 节流），
-     * 否则下载，成功回调 onFileDone、返回 1000 节流，失败返回 -1（由调用方计失败并复位节流）。
+     * 处理单个文件：先按上一步节流休眠；若本地 meta 已存在则跳过（返回 {@link #RESULT_CACHED}），
+     * 否则下载，成功回调 onFileDone、返回 1000 节流；
+     * 失败按原因分级：资源缺失（403/404）返回 {@link #RESULT_MISSING}（跳过不熔断），
+     * 其余真实失败返回 {@link #RESULT_FAIL}（由调用方计熔断失败并复位节流）。
      */
     private long processFile(String url, boolean isKk, Listener listener, long delay) {
         sleep(delay);
         if (cancelled) {
-            return 0;
+            return RESULT_CACHED;
         }
 
         String localName = UrlBuilder.toLocalName(url);
         String meta = settings.getMeta(localName);
         if (meta != null) {
             // 已缓存，快速跳过
-            return 0;
+            return RESULT_CACHED;
         }
 
         // 下载（带重试）：成功返回可播放路径和 null；失败返回原因。
         java.util.Map.Entry<Boolean, String> r = fetchWithRetry(url);
         if (!r.getKey()) {
-            // 记录失败（限制条数），熔断判定由调用方依据返回 -1 累积
+            // 记录失败（限制条数）
             recordFailure(url, r.getValue());
-            return -1;
+            // 资源缺失不熔断：单个缺失文件不应中断整批有效下载
+            if (isMissingResource(r.getValue())) {
+                return RESULT_MISSING;
+            }
+            return RESULT_FAIL;
         }
         if (listener != null) {
             listener.onFileDone(isKk);
@@ -253,6 +282,18 @@ public final class BatchDownloader {
                 || d.contains("extraction failed");
     }
 
+    /**
+     * 资源缺失类错误判定：CDN 返回 403/404（CloudFront 对不存在的对象返回 403）。
+     * 此类失败重试无意义，且不应熔断中断整批有效下载，由调用方按缺失跳过。
+     */
+    private static boolean isMissingResource(String detail) {
+        if (detail == null) {
+            return false;
+        }
+        String d = detail.toLowerCase();
+        return d.contains("403") || d.contains("404");
+    }
+
     /** 记录一次失败（最近保留 50 条），供 UI 诊断展示。 */
     private void recordFailure(String url, String detail) {
         synchronized (recentFailures) {
@@ -271,11 +312,11 @@ public final class BatchDownloader {
     }
 
     /** 熔断时打印最近失败明细，便于实机诊断（adb logcat -s BatchDownloader）。 */
-    private void logBreach(String type) {
+    private void logBreach(String type, int done, int total) {
         synchronized (recentFailures) {
-            Log.e(TAG, "download " + type + " breached threshold; failures=" + recentFailures.size());
-            for (int i = Math.max(0, recentFailures.size() - 12); i < recentFailures.size(); i++) {
-                Failure f = recentFailures.get(i);
+            Log.e(TAG, "download " + type + " breached threshold at #" + done + "/" + total
+                    + "; failures=" + recentFailures.size());
+            for (Failure f : recentFailures) {
                 Log.e(TAG, "  fail: " + f.url + " -> " + f.detail);
             }
         }

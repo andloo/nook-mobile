@@ -121,6 +121,8 @@ public final class SoundCache {
         File localFile = new File(soundDir, localName);
         String stored = settings.getMeta(localName);
 
+        Log.d(TAG, "fetch " + remoteUrl + " (local=" + localName + ", meta=" + stored + ")");
+
         // 1) HEAD：尝试取 Last-Modified；失败/缺头不致命，降级 GET（见下）。
         String serverLastModified = null;
         boolean headOk = false;
@@ -159,7 +161,10 @@ public final class SoundCache {
         File part = new File(soundDir, localName + ".part");
         try {
             Request getReq = new Request.Builder().url(remoteUrl).build();
+            Log.d(TAG, "GET start " + remoteUrl);
+            long t0 = System.currentTimeMillis();
             try (Response getResp = client.newCall(getReq).execute()) {
+                Log.d(TAG, "GET " + remoteUrl + " -> HTTP " + getResp.code() + " in " + (System.currentTimeMillis() - t0) + "ms");
                 if (!getResp.isSuccessful()) {
                     Log.w(TAG, "GET " + remoteUrl + " -> HTTP " + getResp.code());
                     return fallbackLocal(localFile, "GET HTTP " + getResp.code());
@@ -178,6 +183,8 @@ public final class SoundCache {
                      FileOutputStream out = new FileOutputStream(part)) {
                     copy(in, out);
                 }
+                long size = part.length();
+                Log.d(TAG, "GET " + remoteUrl + " downloaded bytes=" + size + " in " + (System.currentTimeMillis() - t0) + "ms");
                 if (!part.renameTo(localFile)) {
                     part.delete();
                     return fallbackLocal(localFile, "rename failed");
