@@ -1,0 +1,153 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:id="@+id/root"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@color/nook_bg">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:padding="16dp">
+
+        <TextView
+            android:id="@+id/lblTitle"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:textColor="@color/nook_green_dark"
+            android:textSize="26sp"
+            android:textStyle="bold"
+            tools:text="player settings" />
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="12dp"
+            android:background="@drawable/bg_card"
+            android:orientation="vertical"
+            android:padding="16dp">
+
+            <com.google.android.material.materialswitch.MaterialSwitch
+                android:id="@+id/swGrandFather"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                tools:text="Grandfather clock mode" />
+
+            <com.google.android.material.materialswitch.MaterialSwitch
+                android:id="@+id/swGameRain"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                tools:text="Use game rain sound" />
+
+            <com.google.android.material.materialswitch.MaterialSwitch
+                android:id="@+id/swPeacefulRain"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                tools:text="Use no-thunder rain sound" />
+
+            <com.google.android.material.materialswitch.MaterialSwitch
+                android:id="@+id/swTuneEnabled"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                tools:text="Enable town tune" />
+
+            <com.google.android.material.materialswitch.MaterialSwitch
+                android:id="@+id/swKkSaturday"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                tools:text="Play K.K. music on Saturday nights" />
+
+            <com.google.android.material.materialswitch.MaterialSwitch
+                android:id="@+id/swNoDownload"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                tools:text="Don't download music" />
+        </LinearLayout>
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="16dp"
+            android:background="@drawable/bg_card"
+            android:orientation="vertical"
+            android:padding="16dp">
+
+            <TextView
+                android:id="@+id/lblOffline"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:textStyle="bold"
+                tools:text="offline" />
+
+            <TextView
+                android:id="@+id/txtHourlyCount"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                tools:text="0/316 offline hourly music files downloaded" />
+
+            <ProgressBar
+                android:id="@+id/hourlyProgress"
+                style="?android:attr/progressBarStyleHorizontal"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:max="100"
+                android:progressTint="@color/nook_purple" />
+
+            <Button
+                android:id="@+id/btnDownloadHourly"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:backgroundTint="@color/nook_green"
+                tools:text="download all hourly music" />
+
+            <TextView
+                android:id="@+id/txtKkCount"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="16dp"
+                tools:text="0/193 offline k.k. music files downloaded" />
+
+            <ProgressBar
+                android:id="@+id/kkProgress"
+                style="?android:attr/progressBarStyleHorizontal"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:max="100"
+                android:progressTint="@color/nook_purple" />
+
+            <Button
+                android:id="@+id/btnDownloadKk"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:backgroundTint="@color/nook_green"
+                tools:text="download all k.k. music" />
+        </LinearLayout>
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="16dp"
+            android:background="@drawable/bg_card"
+            android:orientation="vertical"
+            android:padding="16dp">
+
+            <Button
+                android:id="@+id/btnChangelog"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:backgroundTint="@color/nook_teal"
+                tools:text="changelog" />
+
+            <Button
+                android:id="@+id/btnClearData"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:backgroundTint="@color/nook_error"
+                tools:text="clear local files and settings" />
+        </LinearLayout>
+    </LinearLayout>
+</ScrollView>

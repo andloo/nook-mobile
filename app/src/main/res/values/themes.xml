@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="Theme.NookMobile" parent="Theme.Material3.DayNight.NoActionBar">
+        <item name="colorPrimary">@color/nook_green</item>
+        <item name="colorOnPrimary">@android:color/white</item>
+        <item name="colorSecondary">@color/nook_teal</item>
+        <item name="colorOnSecondary">@android:color/white</item>
+        <item name="android:colorBackground">@color/nook_bg</item>
+        <item name="colorSurface">@color/nook_card</item>
+        <item name="colorOnSurface">@color/nook_brown_dark</item>
+        <item name="android:statusBarColor">@color/nook_green_dark</item>
+        <item name="android:textColorPrimary">@color/nook_brown_dark</item>
+        <item name="android:textColorSecondary">@color/nook_brown</item>
+    </style>
+</resources>

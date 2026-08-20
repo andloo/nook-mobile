@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- adaptive icon 背景：与主界面背景 nook_bg 一致 -->
+    <color name="ic_launcher_background">#F1E2B3</color>
+
+    <!-- 动森奶油色系（参考桌面版 main.css 配色的移动端明亮变体，背景适度加深） -->
+    <color name="nook_bg">#F1E2B3</color>
+    <color name="nook_card">#FFFDF2</color>
+    <color name="nook_cream_dark">#E7D3A0</color>
+    <color name="nook_brown">#7B6242</color>
+    <color name="nook_brown_dark">#5C4830</color>
+    <color name="nook_green">#7BB661</color>
+    <color name="nook_green_dark">#5E9A47</color>
+    <color name="nook_teal">#5EC1A9</color>
+    <color name="nook_yellow">#F4C700</color>
+    <color name="nook_error">#FD4C4C</color>
+    <color name="nook_purple">#6F5694</color>
+
+    <!-- 主题曲编辑器 16 档滑块着色（对齐桌面版 main.css c=1..16） -->
+    <color name="tune_c1">#ADADAD</color>
+    <color name="tune_c2">#B471DC</color>
+    <color name="tune_c3">#BA41DB</color>
+    <color name="tune_c4">#1982D5</color>
+    <color name="tune_c5">#00AADE</color>
+    <color name="tune_c6">#1FCDA3</color>
+    <color name="tune_c7">#00AA00</color>
+    <color name="tune_c8">#83C700</color>
+    <color name="tune_c9">#F4C700</color>
+    <color name="tune_c10">#FEA200</color>
+    <color name="tune_c11">#F97400</color>
+    <color name="tune_c12">#EC5C00</color>
+    <color name="tune_c13">#DF300D</color>
+    <color name="tune_c14">#E23489</color>
+    <color name="tune_c15">#D945AA</color>
+    <color name="tune_c16">#FF72D2</color>
+</resources>

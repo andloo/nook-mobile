@@ -1,0 +1,35 @@
+{
+    "1.0.10": [
+        "Fixed New Leaf 9am and 5pm loops",
+        "Added Population Growing - Rainy Day, will always play the same tune",
+        "Added label when minimized to tray to view the current tune's game and name",
+        "Fixed total download file count",
+        "Added Italian translations (thanks albanobattistella!)",
+        "Added Open on startup option (thanks NoodleSushi!)",
+        "Minor bug fixes"
+    ],
+    "1.0.9": [
+        "Added this changelog :)",
+        "Added Wild World to City Folk label",
+        "Add French and Chinese translations",
+        "Improved hourly chime samples",
+        "Fixed offline mode playback",
+        "Minor bug fixes"
+    ],
+    "1.0.8": [
+        "Bug fixes",
+        "Added German translations"
+    ],
+    "1.0.7": [
+        "Fix windows issue where if closed with the context menu or alt+f4 it wouldn't close"
+    ],
+    "1.0.6": [
+        "Mac version published"
+    ],
+    "1.0.5": [
+        "Add GitHub link and mac publish config"
+    ],
+    "1.0.4": [
+        "Autoupdate notification fix"
+    ]
+}
