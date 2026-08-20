@@ -2,27 +2,43 @@ package com.nook.mobile.ui;
 
 import android.content.Context;
 import android.graphics.Canvas;
+import android.graphics.drawable.Drawable;
 import android.util.AttributeSet;
 import android.view.MotionEvent;
 
 import androidx.appcompat.widget.AppCompatSeekBar;
+import androidx.core.content.ContextCompat;
+
+import com.nook.mobile.R;
 
 /**
  * 竖直 SeekBar（主题曲编辑器 16 音符滑块用，FR-22）。
  * 通过旋转画布实现：进度从下（min）到上（max）。
+ * thumb 使用圆钮样式（{@link R.drawable#seek_thumb}），由音高色 tint 着色。
  */
 public class VerticalSeekBar extends AppCompatSeekBar {
 
     public VerticalSeekBar(Context context) {
         super(context);
+        init();
     }
 
     public VerticalSeekBar(Context context, AttributeSet attrs) {
         super(context, attrs);
+        init();
     }
 
     public VerticalSeekBar(Context context, AttributeSet attrs, int defStyleAttr) {
         super(context, attrs, defStyleAttr);
+        init();
+    }
+
+    /** 应用自定义圆钮 thumb（默认圆点换成按钮图案）。 */
+    private void init() {
+        Drawable thumb = ContextCompat.getDrawable(getContext(), R.drawable.seek_thumb);
+        if (thumb != null) {
+            setThumb(thumb);
+        }
     }
 
     @Override

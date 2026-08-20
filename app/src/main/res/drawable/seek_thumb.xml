@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 主题曲编辑器滑块 thumb：圆形按钮环（对齐源码三圆叠加的圆钮质感），
+     由 VerticalSeekBar 的 thumbTint 统一着色为对应音高颜色 -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="26dp"
+    android:height="26dp"
+    android:viewportWidth="26"
+    android:viewportHeight="26">
+    <!-- 外圈按钮（白色，tint 后变为音高色） -->
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:fillType="evenOdd"
+        android:pathData="M13 1.5 A11.5 11.5 0 1 0 13 24.5 A11.5 11.5 0 1 0 13 1.5 Z M13 8 A5 5 0 1 0 13 18 A5 5 0 1 0 13 8 Z" />
+</vector>
