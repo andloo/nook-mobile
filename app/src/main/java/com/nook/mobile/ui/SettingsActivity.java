@@ -327,7 +327,9 @@ public final class SettingsActivity extends AppCompatActivity {
     /** 更新日志（FR-60）：渲染 assets/release-log.json（版本号 + 条目列表）。 */
     private void showChangelog() {
         StringBuilder sb = new StringBuilder();
-        try (InputStream is = getAssets().open("release-log.json");
+        // 中文语言（cn）加载翻译后的中文更新日志，其余语言使用英文原版
+        String assetName = "cn".equals(i18n.getLanguage()) ? "release-log_cn.json" : "release-log.json";
+        try (InputStream is = getAssets().open(assetName);
              BufferedReader reader = new BufferedReader(new InputStreamReader(is, StandardCharsets.UTF_8))) {
             Type type = new TypeToken<Map<String, List<String>>>() {
             }.getType();
