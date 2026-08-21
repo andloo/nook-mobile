@@ -6,3 +6,8 @@ local.properties
 .idea/
 *.iml
 .DS_Store
+
+# 签名凭据与密钥库（禁止入库）
+key.properties
+keystore/
+*.jks

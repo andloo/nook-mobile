@@ -2,10 +2,28 @@ plugins {
     id 'com.android.application'
 }
 
+// release 签名凭据（key.properties 不入库，缺失时仅影响 release 单步构建）
+def keyProps = new Properties()
+def keyPropsFile = rootProject.file('key.properties')
+if (keyPropsFile.exists()) {
+    keyPropsFile.withInputStream { keyProps.load(it) }
+}
+
 android {
     namespace 'com.nook.mobile'
     compileSdk 35
     buildToolsVersion '35.0.0'
+
+    signingConfigs {
+        release {
+            if (keyPropsFile.exists()) {
+                storeFile rootProject.file(keyProps['storeFile'])
+                storePassword keyProps['storePassword']
+                keyAlias keyProps['keyAlias']
+                keyPassword keyProps['keyPassword']
+            }
+        }
+    }
 
     defaultConfig {
         applicationId "com.nook.mobile"
@@ -21,6 +39,7 @@ android {
         release {
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+            signingConfig signingConfigs.release
         }
     }
 
