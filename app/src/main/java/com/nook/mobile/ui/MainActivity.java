@@ -182,7 +182,9 @@ public final class MainActivity extends AppCompatActivity {
     @Override
     protected void onDestroy() {
         if (service != null) {
-            service.setUiCallback(null);
+            // 只注销自己的回调：本页销毁时可能已由其它页面接管（例如设置页正在前台），
+            // 不能把对方的回调一并清空
+            service.clearUiCallback(uiCallback);
         }
         unbindService(connection);
         super.onDestroy();

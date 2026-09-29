@@ -158,7 +158,9 @@ public final class SettingsActivity extends AppCompatActivity {
     @Override
     protected void onDestroy() {
         if (service != null) {
-            service.setUiCallback(null);
+            // 只注销自己的回调。返回主界面时本页 onDestroy 晚于主界面 onResume，
+            // 若无条件置 null 会把主界面刚注册的回调清掉（"暂停按钮不再变化"的根因）
+            service.clearUiCallback(uiCallback);
         }
         unbindService(connection);
         super.onDestroy();

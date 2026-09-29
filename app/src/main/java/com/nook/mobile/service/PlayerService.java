@@ -197,8 +197,29 @@ public final class PlayerService extends Service {
 
     // ---- 对 UI 的入口 ----
 
+    /** 注册 UI 回调（单槽位，后注册者生效）。 */
     public void setUiCallback(UiCallback callback) {
         this.ui = callback;
+    }
+
+    /**
+     * 注销 UI 回调——<b>仅当当前注册者正好是 callback 时才清除</b>。
+     * <p>
+     * 这里不能像原来那样直接 {@code setUiCallback(null)}。从设置页返回主界面时，
+     * Android 的回调顺序是：
+     * <pre>
+     *   设置页 onPause → 主界面 onResume（重新注册）→ 设置页 onStop → 设置页 onDestroy（注销）
+     * </pre>
+     * 即「先恢复的页面注册」早于「后销毁的页面注销」。无条件置 null 会把主界面刚注册的回调顶掉，
+     * 主界面此后收不到 onPauseChanged / onPlayingChanged 等事件，表现为
+     * <b>「播放/暂停按钮点一下不再变化」</b>——而音乐其实照常切换，只是按钮文案与实际状态脱节。
+     * <p>
+     * 按实例比对后，无论上述顺序如何颠倒都是安全的：只有真正持有该槽位的页面才能清空它。
+     */
+    public void clearUiCallback(UiCallback callback) {
+        if (this.ui == callback) {
+            this.ui = null;
+        }
     }
 
     public boolean isStarted() {
