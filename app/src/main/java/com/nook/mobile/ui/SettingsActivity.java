@@ -129,11 +129,7 @@ public final class SettingsActivity extends AppCompatActivity {
 
         InsetsUtil.applySystemBars(findViewById(R.id.root));
         settings = new SettingsRepository(this);
-        try {
-            i18n = new I18nManager(this);
-        } catch (IOException e) {
-            throw new IllegalStateException("failed to load i18n assets", e);
-        }
+        i18n = I18nManager.get(this);
         i18n.setLanguage(settings.getLang());
 
         swGrandFather = findViewById(R.id.swGrandFather);
@@ -374,14 +370,17 @@ public final class SettingsActivity extends AppCompatActivity {
 
     /** 离线计数文案（trf 占位符；整点展示分母 294、K.K. 193，下载逻辑仍按 316 遍历）。 */
     private void renderCounts() {
+        // 单次遍历同时取两个计数（原来两次 getAll() 各拷贝一遍整份偏好表）
+        SettingsRepository.OfflineCounts counts = settings.countOffline();
+
         Map<String, String> hourly = new HashMap<>();
-        hourly.put("offlineFiles", String.valueOf(settings.countOfflineHourly()));
+        hourly.put("offlineFiles", String.valueOf(counts.hourly));
         hourly.put("totalFiles", String.valueOf(BatchDownloader.DISPLAY_TOTAL_HOURLY));
         ((TextView) findViewById(R.id.txtHourlyCount)).setText(
                 i18n.trf("{{offlineFiles}}/{{totalFiles}} offline hourly music files downloaded", hourly));
 
         Map<String, String> kk = new HashMap<>();
-        kk.put("offlineKKFiles", String.valueOf(settings.countOfflineKk()));
+        kk.put("offlineKKFiles", String.valueOf(counts.kk));
         kk.put("totalKKFiles", String.valueOf(BatchDownloader.TOTAL_KK));
         ((TextView) findViewById(R.id.txtKkCount)).setText(
                 i18n.trf("{{offlineKKFiles}}/{{totalKKFiles}} offline k.k. music files downloaded", kk));

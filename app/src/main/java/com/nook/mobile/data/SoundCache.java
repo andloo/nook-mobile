@@ -15,7 +15,8 @@ import java.util.Date;
 import java.util.Locale;
 import java.util.TimeZone;
 import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
+import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 
 import okhttp3.OkHttpClient;
@@ -34,6 +35,12 @@ public final class SoundCache {
 
     /** HTTP 超时（连接/读/写/整体调用），20 秒（移动网络慢时留足余量）。 */
     private static final long TIMEOUT_SECONDS = 20;
+
+    /**
+     * 本地缓存校验有效期 24 小时：TTL 内直接使用本地文件、不发任何网络请求（省电，FR-40）。
+     * 上游音频极少变动，过期后首次播放再发一次 HEAD 比对 Last-Modified。
+     */
+    private static final long REVALIDATE_TTL_MS = 24 * 60 * 60 * 1000L;
 
     private static final String LAST_MODIFIED_HEADER = "Last-Modified";
 
@@ -59,7 +66,9 @@ public final class SoundCache {
     private final OkHttpClient client;
     private final File soundDir;
     private final SettingsRepository settings;
-    private final ExecutorService executor = Executors.newSingleThreadExecutor();
+    /** 单线程执行器：空闲 30s 后回收工作线程，避免常驻线程（省内存）。 */
+    private final ExecutorService executor = new ThreadPoolExecutor(
+            0, 1, 30L, TimeUnit.SECONDS, new LinkedBlockingQueue<>());
 
     public SoundCache(Context context, SettingsRepository settings) {
         this.settings = settings;
@@ -100,6 +109,7 @@ public final class SoundCache {
     /**
      * 同步取源（须在后台线程）。取源优先级（FR-40 增强）：
      * <ol>
+     *   <li>本地 meta 存在且距上次校验未超过 {@link #REVALIDATE_TTL_MS} → 直接返回本地文件（零网络请求）。</li>
      *   <li>preferNoDownload → 直接返回在线 URL（流式，不缓存）。</li>
      *   <li>HEAD 取 Last-Modified 与本地 meta 比对：命中缓存直接返回本地路径；否则 GET 下载。</li>
      *   <li>HEAD 失败或无 Last-Modified 头时不再直接判失败，降级走 GET（GET 成功仍可下载缓存，
@@ -122,6 +132,19 @@ public final class SoundCache {
         String stored = settings.getMeta(localName);
 
         Log.d(TAG, "fetch " + remoteUrl + " (local=" + localName + ", meta=" + stored + ")");
+
+        // 0) TTL 内直接命中本地缓存：不发任何网络请求（省电，FR-40）
+        if (stored != null && localFile.exists()
+                && System.currentTimeMillis() - settings.getMetaCheckedAt(localName) < REVALIDATE_TTL_MS) {
+            if (isKk && !OggRemuxer.ensurePlayable(localFile)) {
+                localFile.delete();
+                settings.removeMeta(localName);
+                Log.w(TAG, "cached K.K. unplayable, re-download: " + localName);
+            } else {
+                Log.d(TAG, "cache hit (ttl): " + localFile.getAbsolutePath());
+                return new FetchResult(localFile.getAbsolutePath(), null);
+            }
+        }
 
         // 1) HEAD：尝试取 Last-Modified；失败/缺头不致命，降级 GET（见下）。
         String serverLastModified = null;
@@ -150,6 +173,8 @@ public final class SoundCache {
                     settings.removeMeta(localName);
                     Log.w(TAG, "cached K.K. unplayable, re-download: " + localName);
                 } else {
+                    // 刷新校验时间戳：此后 TTL 内不再重复校验
+                    settings.setMeta(localName, serverLastModified);
                     Log.d(TAG, "cache hit: " + localFile.getAbsolutePath());
                     return new FetchResult(localFile.getAbsolutePath(), null);
                 }
@@ -264,14 +289,19 @@ public final class SoundCache {
         return stored.equals(server);
     }
 
+    /** HTTP 日期解析器（SimpleDateFormat 非线程安全，按线程复用，避免每次调用新建）。 */
+    private static final ThreadLocal<SimpleDateFormat> HTTP_DATE_FORMAT = ThreadLocal.withInitial(() -> {
+        SimpleDateFormat fmt = new SimpleDateFormat("EEE, dd MMM yyyy HH:mm:ss zzz", Locale.US);
+        fmt.setTimeZone(TimeZone.getTimeZone("GMT"));
+        return fmt;
+    });
+
     private static Long parseHttpDate(String value) {
         if (value == null) {
             return null;
         }
-        SimpleDateFormat fmt = new SimpleDateFormat("EEE, dd MMM yyyy HH:mm:ss zzz", Locale.US);
-        fmt.setTimeZone(TimeZone.getTimeZone("GMT"));
         try {
-            Date d = fmt.parse(value);
+            Date d = HTTP_DATE_FORMAT.get().parse(value);
             return d != null ? d.getTime() : null;
         } catch (ParseException e) {
             return null;

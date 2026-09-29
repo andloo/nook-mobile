@@ -8,7 +8,9 @@ import com.nook.mobile.domain.UrlBuilder;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
+import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.TimeUnit;
 
 /**
  * 批量预下载整点音乐 / K.K. 音乐（FR-42）。
@@ -85,7 +87,9 @@ public final class BatchDownloader {
     private final SoundCache soundCache;
     private final SettingsRepository settings;
     private final KkRepository kkRepo;
-    private final ExecutorService executor = Executors.newSingleThreadExecutor();
+    /** 单线程执行器：空闲 30s 后回收工作线程，避免常驻线程（省内存）。 */
+    private final ExecutorService executor = new ThreadPoolExecutor(
+            0, 1, 30L, TimeUnit.SECONDS, new LinkedBlockingQueue<>());
 
     private volatile boolean cancelled = false;
 

@@ -63,13 +63,13 @@ public final class KkListActivity extends AppCompatActivity {
 
         InsetsUtil.applySystemBars(findViewById(R.id.root));
         settings = new SettingsRepository(this);
+        i18n = I18nManager.get(this);
+        i18n.setLanguage(settings.getLang());
         try {
-            i18n = new I18nManager(this);
             kkRepo = new KkRepository(this);
         } catch (IOException e) {
-            throw new IllegalStateException("failed to load assets", e);
+            throw new IllegalStateException("failed to load kk.json", e);
         }
-        i18n.setLanguage(settings.getLang());
 
         songs.addAll(kkRepo.allSongs());
         checked.addAll(settings.getKkEnabled(kkRepo.allSongs()));

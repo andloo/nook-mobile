@@ -10,36 +10,52 @@
 
 ### 功能特性
 
-- **整点切歌**：5 秒轮询 + 精确闹钟兜底，整点播放对应小时主题音乐（14 个游戏模式 + K.K. + 随机）
+- **整点切歌**：整点对齐定时器 + 精确闹钟兜底，整点播放对应小时主题音乐（14 个游戏模式 + K.K. + 随机）
 - **雨声环境**：普通雨 / 游戏雨 / 无雷雨三档，摆钟模式下整点单播不循环
 - **主题曲报时**：`chime.ogg` 音频精灵，16 音符编辑器（上 8 / 下 8 两行，适配竖屏，改动即试听）
 - **K.K. 曲库**：193 首现场 / 广播版，自定义播放列表，周六自动切 K.K.
-- **离线缓存**：增量下载（Last-Modified 比对）到本地，可批量预下载，无网可听
+- **离线缓存**：增量下载（Last-Modified 比对）到本地，命中缓存 24 小时内免联网校验，可批量预下载，无网可听
 - **多语言**：中 / 英 / 西 / 德 / 意 / 法，应用内即时切换，默认中文
 - **前台播放服务**：MediaSession 通知栏常驻，音频焦点丢失自动暂停
+
+### 省电与内存优化
+
+- **整点检测**：对齐到「下一个整点 +1s」的单次定时器 + 精确闹钟兜底（不再固定 5s 轮询，唤醒降至 1 次/小时）
+- **缓存校验**：本地音频 24h 内免联网校验，命中缓存零网络请求（TTL 过期后首次播放再比对 Last-Modified）
+- **播放引擎**：ExoPlayer 精简预缓冲（15s/30s）；淡入淡出改由 ValueAnimator 驱动，去掉 2ms/5ms 主线程忙循环
+- **暂停即休眠**：暂停时停止整点定时器与闹钟；进程被回收后残留的整点触发不再产生「僵尸」前台服务
+- **内存**：多语言词典单例 + 按需加载、通知大图标缓存、试听 AudioTrack 复用、空闲工作线程 30s 回收
 
 ## 技术栈
 
 | 项 | 选择 |
 |---|---|
 | 语言 | 纯 Java（单模块 Gradle） |
-| 构建 | Gradle 8.7 + Android Gradle Plugin 8.5.2 |
-| SDK | compileSdk 35 / targetSdk 35 / minSdk 26 |
+| 构建 | Gradle 8.14.5（wrapper）+ Android Gradle Plugin 8.13.2 |
+| SDK | compileSdk 35 / targetSdk 35 / minSdk 26 / buildTools 35.0.0 |
 | 音频 | androidx.media3 ExoPlayer（BGM / 雨声）|
 | 网络 / JSON | OkHttp、Gson |
 | UI | AppCompat + Material Components |
 
 ## 构建
 
-```bash
-# Windows
-gradlew.bat assembleDebug
+环境要求：**JDK 17** + Android SDK（`local.properties` 中配置 `sdk.dir`，该文件不入库）。
+Gradle 由 wrapper 自动下载（8.14.5），依赖仓库走腾讯云镜像 + google/mavenCentral（见 `settings.gradle`）。
 
-# 产出 APK
-app/build/outputs/apk/debug/app-debug.apk
+```bash
+# Windows — 调试包
+gradlew.bat assembleDebug
+# 产出 app/build/outputs/apk/debug/app-debug.apk
+
+# Windows — 正式包（R8 混淆 + 资源压缩）
+gradlew.bat assembleRelease
+# 产出 app/build/outputs/apk/release/app-release.apk
 ```
 
-> 需要本机已配置 Android SDK（`local.properties` 中的 `sdk.dir`，该文件不入库）。
+> release 构建开启了 `minifyEnabled` + `shrinkResources`，混淆规则见 `app/proguard-rules.pro`
+> （含 Gson `TypeToken` 泛型签名保留规则）；签名凭据由根目录 `key.properties` 提供（不入库），
+> 缺失时 `assembleRelease` 无法完成签名。此前无签名凭据时可用
+> `gradlew.bat :app:minifyReleaseWithR8` 单独验证混淆与资源压缩。
 
 ## 目录结构
 

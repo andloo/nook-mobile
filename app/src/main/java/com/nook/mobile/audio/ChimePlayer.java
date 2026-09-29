@@ -1,11 +1,16 @@
 package com.nook.mobile.audio;
 
+import android.animation.Animator;
+import android.animation.AnimatorListenerAdapter;
+import android.animation.ValueAnimator;
 import android.content.Context;
 import android.net.Uri;
 import android.os.Handler;
 import android.os.Looper;
+import android.view.animation.LinearInterpolator;
 
 import androidx.media3.common.MediaItem;
+import androidx.media3.exoplayer.DefaultLoadControl;
 import androidx.media3.exoplayer.ExoPlayer;
 
 import com.nook.mobile.R;
@@ -28,8 +33,9 @@ public final class ChimePlayer {
     /** 每段精灵 4 秒（§4.5）。 */
     private static final long SPRITE_LEN_MS = 4000;
 
-    /** 报时淡出步进间隔 5ms（§6.2）。 */
+    /** 报时淡出步进间隔 5ms（§6.2）：用于把原步进折算为等价的 ValueAnimator 时长。 */
     private static final long FADE_STEP_MS = 5;
+    private static final float FADE_STEP = 0.01f;
 
     private final ExoPlayer player;
     private final Uri chimeUri;
@@ -37,10 +43,14 @@ public final class ChimePlayer {
     private final Random random = new Random();
 
     private Runnable tuneStep;
-    private Runnable fadeStep;
+    private ValueAnimator fadeAnim;
 
     public ChimePlayer(Context context) {
-        this.player = new ExoPlayer.Builder(context).build();
+        // chime.ogg 为本地资源，无需大缓冲（默认 50s，内存占用偏大）
+        DefaultLoadControl loadControl = new DefaultLoadControl.Builder()
+                .setBufferDurationsMs(2_000, 4_000, 500, 1_000)
+                .build();
+        this.player = new ExoPlayer.Builder(context).setLoadControl(loadControl).build();
         this.chimeUri = Uri.parse("android.resource://" + context.getPackageName() + "/" + R.raw.chime);
     }
 
@@ -107,25 +117,47 @@ public final class ChimePlayer {
         handler.post(tuneStep);
     }
 
-    /** 淡出（每步 -0.01 / 5ms）到 0 后停止。 */
+    /** 淡出（等效原每步 -0.01 / 5ms）到 0 后停止；用 ValueAnimator 跟随 vsync，替代 5ms 忙循环。 */
     private void fadeAndStop(final Runnable onDone) {
-        fadeStep = new Runnable() {
+        cancelFade();
+        final float start = player.getVolume();
+        if (start < FADE_STEP) {
+            player.setVolume(0f);
+            player.stop();
+            if (onDone != null) {
+                onDone.run();
+            }
+            return;
+        }
+        ValueAnimator anim = ValueAnimator.ofFloat(start, 0f);
+        anim.setDuration((long) Math.ceil(start / FADE_STEP) * FADE_STEP_MS);
+        anim.setInterpolator(new LinearInterpolator());
+        anim.addUpdateListener(a -> player.setVolume((Float) a.getAnimatedValue()));
+        anim.addListener(new AnimatorListenerAdapter() {
             @Override
-            public void run() {
-                float next = Math.max(0f, player.getVolume() - 0.01f);
-                player.setVolume(next);
-                if (next <= 0f) {
-                    fadeStep = null;
-                    player.stop();
-                    if (onDone != null) {
-                        onDone.run();
-                    }
-                } else {
-                    handler.postDelayed(this, FADE_STEP_MS);
+            public void onAnimationEnd(Animator animation) {
+                if (fadeAnim != animation) {
+                    return; // 已被 cancel() 取消/取代
+                }
+                fadeAnim = null;
+                player.setVolume(0f);
+                player.stop();
+                if (onDone != null) {
+                    onDone.run();
                 }
             }
-        };
-        handler.post(fadeStep);
+        });
+        fadeAnim = anim;
+        anim.start();
+    }
+
+    /** 取消进行中的淡出（先清引用再 cancel，避免 onAnimationEnd 误触发原回调）。 */
+    private void cancelFade() {
+        if (fadeAnim != null) {
+            ValueAnimator anim = fadeAnim;
+            fadeAnim = null;
+            anim.cancel();
+        }
     }
 
     /** 立即取消当前演奏与淡出。 */
@@ -134,10 +166,7 @@ public final class ChimePlayer {
             handler.removeCallbacks(tuneStep);
             tuneStep = null;
         }
-        if (fadeStep != null) {
-            handler.removeCallbacks(fadeStep);
-            fadeStep = null;
-        }
+        cancelFade();
         player.stop();
     }
 

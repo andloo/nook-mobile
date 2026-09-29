@@ -42,11 +42,13 @@ import java.util.Calendar;
 import java.util.List;
 import java.util.Random;
 import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
+import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.TimeUnit;
 
 /**
  * 前台播放服务（对应桌面版隐藏窗口 player.js，FR-01/03/14/17/21/30-35/73）。
- * 5s Handler 轮询 timeCheck() + AlarmManager 整点兜底；
+ * 整点对齐 Handler 定时器 + AlarmManager 整点兜底（原固定 5s 轮询改为每整点唤醒一次，省电）；
  * 音频取源（SoundCache.getUrlSync）一律在后台线程执行。
  */
 public final class PlayerService extends Service {
@@ -56,9 +58,6 @@ public final class PlayerService extends Service {
     private static final String TAG = "PlayerService";
     private static final String CHANNEL_ID = "nook_playback";
     private static final int NOTIFICATION_ID = 1;
-
-    /** 整点检测循环 5000ms（FR-01 / §6.2）。 */
-    private static final long TICK_MS = 5000;
 
     /** UI 回调（全部已切主线程）。 */
     public interface UiCallback {
@@ -96,7 +95,9 @@ public final class PlayerService extends Service {
 
     private final IBinder binder = new LocalBinder();
     private final Handler handler = new Handler(Looper.getMainLooper());
-    private final ExecutorService ioExecutor = Executors.newSingleThreadExecutor();
+    /** 单线程取源执行器：空闲 30s 后回收工作线程，避免常驻线程（省内存）。 */
+    private final ExecutorService ioExecutor = new ThreadPoolExecutor(
+            0, 1, 30L, TimeUnit.SECONDS, new LinkedBlockingQueue<>());
     private final Random random = new Random();
 
     private SettingsRepository settings;
@@ -126,6 +127,12 @@ public final class PlayerService extends Service {
     private String lastHourText;
 
     private Runnable tick;
+
+    /** 通知大图标位图缓存（服务内复用，避免每次刷新通知都新建位图）。 */
+    private Bitmap largeIcon;
+
+    /** K.K. 启用列表缓存：仅在歌单保存后失效（避免每次整点选曲都 Gson 解析 + 拷贝）。 */
+    private List<String> kkEnabledSongs;
 
     // ---- 生命周期 ----
 
@@ -172,11 +179,20 @@ public final class PlayerService extends Service {
     public int onStartCommand(Intent intent, int flags, int startId) {
         // startForegroundService 后必须尽快 startForeground
         startForeground(NOTIFICATION_ID, buildNotification(lastFriendly, lastHourText));
-        if (intent != null && ACTION_TIME_CHECK.equals(intent.getAction()) && started) {
+        final boolean isTimeCheck = intent != null && ACTION_TIME_CHECK.equals(intent.getAction());
+        if (isTimeCheck && started) {
             timeCheck();
-            scheduleHourAlarm();
+            if (!paused) {
+                // 暂停中不续订整点闹钟（恢复播放时会重新安排）
+                scheduleHourAlarm();
+            }
+        } else if (isTimeCheck) {
+            // 进程被系统回收后残留的整点触发：此时没有播放任务，退出前台并停止服务，
+            // 避免留下「常驻通知 + 空转进程」的僵尸前台服务
+            stopForeground(STOP_FOREGROUND_REMOVE);
+            stopSelf(startId);
         }
-        return START_STICKY;
+        return START_NOT_STICKY;
     }
 
     @Override
@@ -262,15 +278,27 @@ public final class PlayerService extends Service {
         }
     }
 
-    /** 音乐音量 0-100（FR-31），同步报时音量（报时每次发声时读取）。 */
-    public void changeMusicVolume(int vol) {
-        settings.setSoundVol(vol);
+    /**
+     * 音乐音量 0-100（FR-31），同步报时音量（报时每次发声时读取）。
+     *
+     * @param persist 是否写入设置：拖动过程中传 false（仅实时生效），松手/离开页面时传 true
+     */
+    public void changeMusicVolume(int vol, boolean persist) {
+        if (persist) {
+            settings.setSoundVol(vol);
+        }
         engine.setMusicVolume(vol / 100f);
     }
 
-    /** 雨声音量 0-100（FR-32）。 */
-    public void changeRainVolume(int vol) {
-        settings.setRainVol(vol);
+    /**
+     * 雨声音量 0-100（FR-32）。
+     *
+     * @param persist 是否写入设置：拖动过程中传 false（仅实时生效），松手/离开页面时传 true
+     */
+    public void changeRainVolume(int vol, boolean persist) {
+        if (persist) {
+            settings.setRainVol(vol);
+        }
         engine.setRainVolume(vol / 100f);
     }
 
@@ -315,6 +343,7 @@ public final class PlayerService extends Service {
 
     /** K.K. 列表保存后即时生效（FR-16）：K.K. 模式下立即按新列表重新随机。 */
     public void kkListSaved() {
+        kkEnabledSongs = null;
         if (GameCatalog.KK_GAME.equals(currentGame) && started && !paused) {
             replayCurrentHour();
         }
@@ -332,6 +361,9 @@ public final class PlayerService extends Service {
         paused = pause;
         settings.setPaused(pause);
         if (pause) {
+            // 暂停即无播放任务：停止整点定时器与闹钟，避免空转唤醒（省电）
+            stopTick();
+            cancelHourAlarm();
             chime.cancel();
             engine.stopAll(null);
             lastFriendly = null;
@@ -348,6 +380,8 @@ public final class PlayerService extends Service {
             requestFocus();
             hour = null;
             playRain();
+            startTick();
+            scheduleHourAlarm();
             timeCheck();
         }
         notifyPause();
@@ -369,18 +403,25 @@ public final class PlayerService extends Service {
 
     // ---- 整点检测 ----
 
+    /**
+     * 整点对齐定时器（FR-01）：一次性调度到「下一个整点 +1s」，触发后重新对齐下个整点。
+     * 与精确闹钟互为兜底（精确闹钟不可用时保证整点切歌），timeCheck() 幂等，
+     * 两者同时触发不会重复切歌；唤醒次数由固定 5s 轮询（720 次/小时）降为 1 次/小时。
+     */
     private void startTick() {
         stopTick();
         tick = new Runnable() {
             @Override
             public void run() {
-                if (!paused) {
-                    timeCheck();
+                if (paused) {
+                    tick = null;
+                    return;
                 }
-                handler.postDelayed(this, TICK_MS);
+                timeCheck();
+                handler.postDelayed(this, delayToNextHourMs());
             }
         };
-        handler.postDelayed(tick, TICK_MS);
+        handler.postDelayed(tick, delayToNextHourMs());
     }
 
     private void stopTick() {
@@ -388,6 +429,21 @@ public final class PlayerService extends Service {
             handler.removeCallbacks(tick);
             tick = null;
         }
+    }
+
+    /** 距「下一个整点 +1s」的毫秒数（与精确闹钟同一时刻点）。 */
+    private static long delayToNextHourMs() {
+        return Math.max(1L, nextHourBoundaryMs() - System.currentTimeMillis());
+    }
+
+    /** 「下一个整点 +1s」的绝对时间戳（定时器与精确闹钟共用）。 */
+    private static long nextHourBoundaryMs() {
+        Calendar next = Calendar.getInstance();
+        next.set(Calendar.MINUTE, 0);
+        next.set(Calendar.SECOND, 1);
+        next.set(Calendar.MILLISECOND, 0);
+        next.add(Calendar.HOUR_OF_DAY, 1);
+        return next.getTimeInMillis();
     }
 
     /**
@@ -460,7 +516,7 @@ public final class PlayerService extends Service {
         final String musicKey;
         final String url;
         if (isKk) {
-            List<String> enabled = settings.getKkEnabled(kkRepo.allSongs());
+            List<String> enabled = kkEnabled();
             String song = kkRepo.randomFrom(enabled);
             if (song == null) {
                 postError("failedToLoadSound", null);
@@ -505,6 +561,14 @@ public final class PlayerService extends Service {
     }
 
     // ---- 雨声 ----
+
+    /** K.K. 启用列表（带缓存，kkListSaved() 时失效）。 */
+    private List<String> kkEnabled() {
+        if (kkEnabledSongs == null) {
+            kkEnabledSongs = settings.getKkEnabled(kkRepo.allSongs());
+        }
+        return kkEnabledSongs;
+    }
 
     /** 启动/重启雨声底噪（FR-30），循环由摆钟模式决定。 */
     private void playRain() {
@@ -616,12 +680,7 @@ public final class PlayerService extends Service {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && !am.canScheduleExactAlarms()) {
             return;
         }
-        Calendar next = Calendar.getInstance();
-        next.set(Calendar.MINUTE, 0);
-        next.set(Calendar.SECOND, 1);
-        next.set(Calendar.MILLISECOND, 0);
-        next.add(Calendar.HOUR_OF_DAY, 1);
-        am.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, next.getTimeInMillis(), hourAlarmIntent());
+        am.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, nextHourBoundaryMs(), hourAlarmIntent());
     }
 
     private void cancelHourAlarm() {
@@ -698,16 +757,19 @@ public final class PlayerService extends Service {
 
     /** 通知展开态大图标：直接使用参考图（独立资源，避免 adaptive 蒙版影响）。 */
     private Bitmap largeIcon() {
-        Drawable d = getDrawable(R.drawable.ic_notification_large);
-        if (d == null) {
-            return null;
+        // 服务生命周期内只渲染一次，避免每次刷新通知（或重启前台服务）都新建位图
+        if (largeIcon == null) {
+            Drawable d = getDrawable(R.drawable.ic_notification_large);
+            if (d == null) {
+                return null;
+            }
+            int size = (int) (getResources().getDisplayMetrics().density * 64);
+            largeIcon = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888);
+            Canvas canvas = new Canvas(largeIcon);
+            d.setBounds(0, 0, size, size);
+            d.draw(canvas);
         }
-        int size = (int) (getResources().getDisplayMetrics().density * 64);
-        Bitmap bmp = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888);
-        Canvas canvas = new Canvas(bmp);
-        d.setBounds(0, 0, size, size);
-        d.draw(canvas);
-        return bmp;
+        return largeIcon;
     }
 
     private void updateNotification(String friendlyName, String hourText) {

@@ -41,6 +41,10 @@ public final class BeepSynth {
     private final Random random = new Random();
 
     private AudioTrack track;
+    /** 当前轨道缓冲字节数：同长度音符（拖动试听固定 350ms）复用同一轨道，避免每个音符新建/释放。 */
+    private int trackBytes;
+    /** 复用的 PCM 缓冲（与轨道等长）。 */
+    private short[] pcm;
     private Runnable beepsStep;
 
     /**
@@ -117,15 +121,17 @@ public final class BeepSynth {
         stopTrack();
     }
 
-    public void release() {
-        cancel();
-    }
-
-    /** 生成三角波 PCM 并用 MODE_STATIC 的 AudioTrack 播放（带短包络防爆音）。 */
+    /**
+     * 生成三角波 PCM 并用复用的 MODE_STATIC 轨道播放（带短包络防爆音）。
+     * 轨道按音长复用：拖动试听固定 350ms，同一轨道反复使用，避免每个音符都新建/释放 AudioTrack。
+     */
     private void playTone(double freq, int durationMs) {
-        stopTrack();
         int samples = SAMPLE_RATE * durationMs / 1000;
-        short[] pcm = new short[samples];
+        if (!ensureTrack(samples * 2)) {
+            return;
+        }
+        // MODE_STATIC 下重写数据前必须先停止当前播放
+        stopTrack();
         int attack = SAMPLE_RATE * 5 / 1000;
         int release = SAMPLE_RATE * 60 / 1000;
         for (int i = 0; i < samples; i++) {
@@ -140,6 +146,16 @@ public final class BeepSynth {
             }
             pcm[i] = (short) (tri * env * VOLUME * Short.MAX_VALUE);
         }
+        track.write(pcm, 0, samples);
+        track.play();
+    }
+
+    /** 按需创建/复用静态轨道与 PCM 缓冲；返回 false 表示轨道创建失败。 */
+    private boolean ensureTrack(int bytes) {
+        if (track != null && trackBytes == bytes) {
+            return true;
+        }
+        releaseTrack();
         AudioTrack t = new AudioTrack.Builder()
                 .setAudioAttributes(new AudioAttributes.Builder()
                         .setUsage(AudioAttributes.USAGE_MEDIA)
@@ -151,13 +167,19 @@ public final class BeepSynth {
                         .setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
                         .build())
                 .setTransferMode(AudioTrack.MODE_STATIC)
-                .setBufferSizeInBytes(pcm.length * 2)
+                .setBufferSizeInBytes(bytes)
                 .build();
-        t.write(pcm, 0, pcm.length);
-        t.play();
+        if (t.getState() != AudioTrack.STATE_INITIALIZED) {
+            t.release();
+            return false;
+        }
         track = t;
+        trackBytes = bytes;
+        pcm = new short[bytes / 2];
+        return true;
     }
 
+    /** 停止当前发声（保留轨道供复用）。 */
     private void stopTrack() {
         if (track != null) {
             try {
@@ -165,8 +187,22 @@ public final class BeepSynth {
             } catch (IllegalStateException e) {
                 // 未初始化或已释放，忽略
             }
+        }
+    }
+
+    /** 释放轨道与 PCM 缓冲（页面销毁时调用）。 */
+    private void releaseTrack() {
+        if (track != null) {
+            stopTrack();
             track.release();
             track = null;
         }
+        trackBytes = 0;
+        pcm = null;
+    }
+
+    public void release() {
+        cancel();
+        releaseTrack();
     }
 }

@@ -1,13 +1,17 @@
 package com.nook.mobile.audio;
 
+import android.animation.Animator;
+import android.animation.AnimatorListenerAdapter;
+import android.animation.ValueAnimator;
 import android.content.Context;
 import android.net.Uri;
-import android.os.Handler;
-import android.os.Looper;
+import android.view.animation.LinearInterpolator;
 
+import androidx.media3.common.C;
 import androidx.media3.common.MediaItem;
 import androidx.media3.common.PlaybackException;
 import androidx.media3.common.Player;
+import androidx.media3.exoplayer.DefaultLoadControl;
 import androidx.media3.exoplayer.ExoPlayer;
 
 import java.io.File;
@@ -18,14 +22,20 @@ import java.io.File;
  * <p>
  * 循环规则（FR-14 / FR-30 / FR-33）：bgm 在 !grandFather 且非 K.K. 时 REPEAT_MODE_ONE；
  * rain 在 !grandFather 时 REPEAT_MODE_ONE；否则 OFF。
- * 淡入淡出：Handler 步进 setVolume，每步 0.01、间隔 2ms（§6.2），淡出到 0 后 stop。
+ * 淡入淡出：ValueAnimator 跟随 vsync 步进 setVolume（等效原 0.01/2ms 的渐变时长），淡出到 0 后 stop。
  * 所有方法须在主线程调用。
  */
 public final class AudioEngine {
 
-    /** 淡入淡出步进间隔（ms）与步长（§6.2）。 */
+    /** 淡入淡出步进间隔（ms）与步长（§6.2）：用于把原步进折算为等价的 ValueAnimator 时长。 */
     private static final long FADE_STEP_MS = 2;
     private static final float FADE_STEP = 0.01f;
+
+    /** 纯音频紧凑缓冲：默认 min/max 为 50s，内存占用偏大；15s/30s 足以覆盖弱网抖动。 */
+    private static final int MIN_BUFFER_MS = 15_000;
+    private static final int MAX_BUFFER_MS = 30_000;
+    private static final int BUFFER_FOR_PLAYBACK_MS = 2_500;
+    private static final int BUFFER_FOR_PLAYBACK_AFTER_REBUFFER_MS = 5_000;
 
     /** 播放事件回调（主线程触发）。 */
     public interface Listener {
@@ -41,14 +51,13 @@ public final class AudioEngine {
 
     private final ExoPlayer bgm;
     private final ExoPlayer rain;
-    private final Handler handler = new Handler(Looper.getMainLooper());
     private final Listener listener;
 
     private float musicVol = 0.5f;
     private float rainVol = 0.5f;
 
-    private Runnable bgmFade;
-    private Runnable rainFade;
+    private ValueAnimator bgmFade;
+    private ValueAnimator rainFade;
 
     private boolean kkMode;
     private String bgmSource;
@@ -56,8 +65,8 @@ public final class AudioEngine {
 
     public AudioEngine(Context context, Listener listener) {
         this.listener = listener;
-        this.bgm = new ExoPlayer.Builder(context).build();
-        this.rain = new ExoPlayer.Builder(context).build();
+        this.bgm = buildPlayer(context);
+        this.rain = buildPlayer(context);
 
         bgm.addListener(new Player.Listener() {
             @Override
@@ -84,6 +93,15 @@ public final class AudioEngine {
         });
     }
 
+    /** 创建播放器并应用纯音频紧凑缓冲（降低 ExoPlayer 默认 50s 预缓冲的内存占用）。 */
+    private static ExoPlayer buildPlayer(Context context) {
+        DefaultLoadControl loadControl = new DefaultLoadControl.Builder()
+                .setBufferDurationsMs(MIN_BUFFER_MS, MAX_BUFFER_MS,
+                        BUFFER_FOR_PLAYBACK_MS, BUFFER_FOR_PLAYBACK_AFTER_REBUFFER_MS)
+                .build();
+        return new ExoPlayer.Builder(context).setLoadControl(loadControl).build();
+    }
+
     /** 本地绝对路径转 file Uri，其余按远程 URL 解析。 */
     private static Uri toUri(String source) {
         if (source.startsWith("/")) {
@@ -102,6 +120,8 @@ public final class AudioEngine {
         cancelFade(true);
         bgmSource = source;
         kkMode = isKk;
+        // 在线流媒体在熄屏时需保持 CPU 唤醒，避免缓冲被 Doze 打断；本地文件不持锁（省电）
+        bgm.setWakeMode(source.startsWith("/") ? C.WAKE_MODE_NONE : C.WAKE_MODE_LOCAL);
         bgm.setMediaItem(MediaItem.fromUri(toUri(source)));
         bgm.setRepeatMode(loop ? Player.REPEAT_MODE_ONE : Player.REPEAT_MODE_OFF);
         bgm.setVolume(0f);
@@ -114,6 +134,8 @@ public final class AudioEngine {
     public void playRain(String source, boolean loop) {
         cancelFade(false);
         rainSource = source;
+        // 在线雨声同理：熄屏时保持 CPU 唤醒，本地文件不持锁
+        rain.setWakeMode(source.startsWith("/") ? C.WAKE_MODE_NONE : C.WAKE_MODE_LOCAL);
         rain.setMediaItem(MediaItem.fromUri(toUri(source)));
         rain.setRepeatMode(loop ? Player.REPEAT_MODE_ONE : Player.REPEAT_MODE_OFF);
         rain.setVolume(0f);
@@ -193,49 +215,61 @@ public final class AudioEngine {
         return Math.max(0f, Math.min(1f, v));
     }
 
+    /** 取消进行中的淡变（先清引用再 cancel，避免 onAnimationEnd 误触发原回调）。 */
     private void cancelFade(boolean isBgm) {
-        Runnable fade = isBgm ? bgmFade : rainFade;
+        ValueAnimator fade = isBgm ? bgmFade : rainFade;
         if (fade != null) {
-            handler.removeCallbacks(fade);
             if (isBgm) {
                 bgmFade = null;
             } else {
                 rainFade = null;
             }
+            fade.cancel();
         }
     }
 
-    /** 以 0.01/2ms 步进把音量渐变到 target，到达后回调 onDone。 */
+    /**
+     * 把音量渐变到 target，到达后回调 onDone。
+     * <p>用 ValueAnimator 跟随 vsync 更新（约 60 次/秒），替代原 0.01/2ms 的 Handler 忙循环
+     * （约 500 次/秒主线程消息）；时长按原步进折算，渐变速度保持一致。
+     */
     private void fadeTo(final boolean isBgm, final float target, final Runnable onDone) {
         cancelFade(isBgm);
         final ExoPlayer player = isBgm ? bgm : rain;
-        Runnable step = new Runnable() {
+        final float start = player.getVolume();
+        if (Math.abs(target - start) < FADE_STEP) {
+            player.setVolume(target);
+            if (onDone != null) {
+                onDone.run();
+            }
+            return;
+        }
+        ValueAnimator anim = ValueAnimator.ofFloat(start, target);
+        anim.setDuration((long) Math.ceil(Math.abs(target - start) / FADE_STEP) * FADE_STEP_MS);
+        anim.setInterpolator(new LinearInterpolator());
+        anim.addUpdateListener(a -> player.setVolume((Float) a.getAnimatedValue()));
+        anim.addListener(new AnimatorListenerAdapter() {
             @Override
-            public void run() {
-                float cur = player.getVolume();
-                float next = cur < target
-                        ? Math.min(target, cur + FADE_STEP)
-                        : Math.max(target, cur - FADE_STEP);
-                player.setVolume(next);
-                if (next == target) {
-                    if (isBgm) {
-                        bgmFade = null;
-                    } else {
-                        rainFade = null;
-                    }
-                    if (onDone != null) {
-                        onDone.run();
-                    }
+            public void onAnimationEnd(Animator animation) {
+                if ((isBgm ? bgmFade : rainFade) != animation) {
+                    return; // 已被 cancelFade 取消/取代
+                }
+                if (isBgm) {
+                    bgmFade = null;
                 } else {
-                    handler.postDelayed(this, FADE_STEP_MS);
+                    rainFade = null;
+                }
+                player.setVolume(target);
+                if (onDone != null) {
+                    onDone.run();
                 }
             }
-        };
+        });
         if (isBgm) {
-            bgmFade = step;
+            bgmFade = anim;
         } else {
-            rainFade = step;
+            rainFade = anim;
         }
-        handler.post(step);
+        anim.start();
     }
 }

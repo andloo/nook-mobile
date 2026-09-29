@@ -19,8 +19,6 @@ import com.nook.mobile.data.I18nManager;
 import com.nook.mobile.data.SettingsRepository;
 import com.nook.mobile.domain.TownTune;
 
-import java.io.IOException;
-
 /**
  * 城镇主题曲编辑器（FR-22）：16 竖直滑块（1..16），改动即试听 beep（FR-23）并按值着色（16 档色）；
  * 播放按钮整条试听并以 350ms 步进高亮；保存后约 1s 显示“已保存”。
@@ -52,11 +50,7 @@ public final class TuneEditorActivity extends AppCompatActivity {
 
         InsetsUtil.applySystemBars(findViewById(R.id.root));
         settings = new SettingsRepository(this);
-        try {
-            i18n = new I18nManager(this);
-        } catch (IOException e) {
-            throw new IllegalStateException("failed to load i18n assets", e);
-        }
+        i18n = I18nManager.get(this);
         i18n.setLanguage(settings.getLang());
         beep = new BeepSynth();
 

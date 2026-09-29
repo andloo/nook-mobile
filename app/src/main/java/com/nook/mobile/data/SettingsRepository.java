@@ -41,6 +41,9 @@ public final class SettingsRepository {
 
     private static final String META_PREFIX = "meta-";
 
+    /** 元数据值内 Last-Modified 与校验时间戳的分隔符（HTTP 日期不含该字符）。 */
+    private static final char META_SEP = '|';
+
     private final SharedPreferences prefs;
     private final Gson gson = new Gson();
 
@@ -191,16 +194,47 @@ public final class SettingsRepository {
         prefs.edit().putString(KEY_KK_ENABLED, gson.toJson(songs)).apply();
     }
 
-    // ---- 文件元数据 meta-{文件名} → lastModified（§4.2 / FR-41） ----
+    // ---- 文件元数据 meta-{文件名} → "lastModified|校验时间戳"（§4.2 / FR-41） ----
 
-    /** 读取某本地文件的 Last-Modified 记录；不存在返回 null。 */
+    /**
+     * 读取某本地文件的 Last-Modified 记录；不存在返回 null。
+     * <p>值为 {@code lastModified|checkedAtMs}；兼容旧格式（无分隔符时整串即 Last-Modified）。
+     */
     public String getMeta(String localName) {
-        return prefs.getString(metaKey(localName), null);
+        String raw = prefs.getString(metaKey(localName), null);
+        if (raw == null) {
+            return null;
+        }
+        int sep = raw.lastIndexOf(META_SEP);
+        return sep >= 0 ? raw.substring(0, sep) : raw;
     }
 
-    /** 写入某本地文件的 Last-Modified 记录。 */
+    /** 读取该文件最近一次与服务端校验 Last-Modified 的时间戳（ms）；旧格式/不存在返回 0。 */
+    public long getMetaCheckedAt(String localName) {
+        String raw = prefs.getString(metaKey(localName), null);
+        if (raw == null) {
+            return 0L;
+        }
+        int sep = raw.lastIndexOf(META_SEP);
+        if (sep < 0) {
+            return 0L;
+        }
+        try {
+            return Long.parseLong(raw.substring(sep + 1));
+        } catch (NumberFormatException e) {
+            return 0L;
+        }
+    }
+
+    /** 写入某本地文件的 Last-Modified 记录，并以当前时间记为本次校验时间。 */
     public void setMeta(String localName, String lastModified) {
-        prefs.edit().putString(metaKey(localName), lastModified).apply();
+        setMeta(localName, lastModified, System.currentTimeMillis());
+    }
+
+    /** 写入某本地文件的 Last-Modified 与校验时间戳。 */
+    public void setMeta(String localName, String lastModified, long checkedAtMs) {
+        String lm = lastModified == null ? "" : lastModified;
+        prefs.edit().putString(metaKey(localName), lm + META_SEP + checkedAtMs).apply();
     }
 
     /** 删除某本地文件的元数据（FR-43 损坏清理）。 */
@@ -218,26 +252,39 @@ public final class SettingsRepository {
 
     // ---- 离线计数（§4.2） ----
 
-    /** 已缓存整点文件数 = 含 meta- 且不含 meta-kk-slider、不含 meta-rain 的键数。 */
-    public int countOfflineHourly() {
-        int count = 0;
-        for (String key : prefs.getAll().keySet()) {
-            if (key.contains(META_PREFIX) && !key.contains("meta-kk-slider") && !key.contains("meta-rain")) {
-                count++;
-            }
+    /** 离线缓存计数结果。 */
+    public static final class OfflineCounts {
+        /** 已缓存整点文件数。 */
+        public final int hourly;
+        /** 已缓存 K.K. 文件数。 */
+        public final int kk;
+
+        OfflineCounts(int hourly, int kk) {
+            this.hourly = hourly;
+            this.kk = kk;
         }
-        return count;
     }
 
-    /** 已缓存 K.K. 文件数 = 含 meta-kk-slider 的键数。 */
-    public int countOfflineKk() {
-        int count = 0;
+    /**
+     * 单次遍历同时统计整点/K.K. 离线文件数：
+     * 整点 = 含 meta- 且不含 meta-kk-slider、不含 meta-rain 的键数；K.K. = 含 meta-kk-slider 的键数。
+     * <p>批量下载时每完成一个文件都会刷新计数，原来两次 {@code getAll()} 会各拷贝一遍整份偏好表，
+     * 这里合并为一次遍历、一次拷贝。
+     */
+    public OfflineCounts countOffline() {
+        int hourly = 0;
+        int kk = 0;
         for (String key : prefs.getAll().keySet()) {
+            if (!key.contains(META_PREFIX)) {
+                continue;
+            }
             if (key.contains("meta-kk-slider")) {
-                count++;
+                kk++;
+            } else if (!key.contains("meta-rain")) {
+                hourly++;
             }
         }
-        return count;
+        return new OfflineCounts(hourly, kk);
     }
 
     /** 清空所有设置与元数据（FR-45）。用同步 commit，确保退出/重启前真正落盘。 */

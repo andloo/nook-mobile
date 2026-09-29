@@ -29,7 +29,6 @@ import com.nook.mobile.data.SettingsRepository;
 import com.nook.mobile.domain.GameCatalog;
 import com.nook.mobile.service.PlayerService;
 
-import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -137,11 +136,7 @@ public final class MainActivity extends AppCompatActivity {
 
         InsetsUtil.applySystemBars(findViewById(R.id.root));
         settings = new SettingsRepository(this);
-        try {
-            i18n = new I18nManager(this);
-        } catch (IOException e) {
-            throw new IllegalStateException("failed to load i18n assets", e);
-        }
+        i18n = I18nManager.get(this);
         i18n.setLanguage(settings.getLang());
 
         btnPause = findViewById(R.id.btnPause);
@@ -177,6 +172,36 @@ public final class MainActivity extends AppCompatActivity {
         // 语言可能在其他入口变更，保持一致
         i18n.setLanguage(settings.getLang());
         renderTexts();
+    }
+
+    @Override
+    protected void onPause() {
+        super.onPause();
+        // 拖动中被打断（如返回手势）时补一次落盘，确保音量持久化
+        if (musicVol.getProgress() != settings.getSoundVol()) {
+            persistMusicVolume(musicVol.getProgress());
+        }
+        if (rainVol.getProgress() != settings.getRainVol()) {
+            persistRainVolume(rainVol.getProgress());
+        }
+    }
+
+    /** 音乐音量落盘（松手/离开页面时调用；服务未绑定则直接写设置）。 */
+    private void persistMusicVolume(int vol) {
+        if (service != null) {
+            service.changeMusicVolume(vol, true);
+        } else {
+            settings.setSoundVol(vol);
+        }
+    }
+
+    /** 雨声音量落盘。 */
+    private void persistRainVolume(int vol) {
+        if (service != null) {
+            service.changeRainVolume(vol, true);
+        } else {
+            settings.setRainVol(vol);
+        }
     }
 
     @Override
@@ -251,13 +276,15 @@ public final class MainActivity extends AppCompatActivity {
         musicVol.setOnSeekBarChangeListener(new SimpleSeekListener() {
             @Override
             public void onProgressChanged(SeekBar seekBar, int progress, boolean fromUser) {
-                if (fromUser) {
-                    if (service != null) {
-                        service.changeMusicVolume(progress);
-                    } else {
-                        settings.setSoundVol(progress);
-                    }
+                if (fromUser && service != null) {
+                    // 拖动中只实时生效，不写盘（避免拖动期间的高频磁盘写入）
+                    service.changeMusicVolume(progress, false);
                 }
+            }
+
+            @Override
+            public void onStopTrackingTouch(SeekBar seekBar) {
+                persistMusicVolume(seekBar.getProgress());
             }
         });
 
@@ -265,13 +292,14 @@ public final class MainActivity extends AppCompatActivity {
         rainVol.setOnSeekBarChangeListener(new SimpleSeekListener() {
             @Override
             public void onProgressChanged(SeekBar seekBar, int progress, boolean fromUser) {
-                if (fromUser) {
-                    if (service != null) {
-                        service.changeRainVolume(progress);
-                    } else {
-                        settings.setRainVol(progress);
-                    }
+                if (fromUser && service != null) {
+                    service.changeRainVolume(progress, false);
                 }
+            }
+
+            @Override
+            public void onStopTrackingTouch(SeekBar seekBar) {
+                persistRainVolume(seekBar.getProgress());
             }
         });
 
