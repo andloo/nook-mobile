@@ -7,7 +7,13 @@ local.properties
 *.iml
 .DS_Store
 
+# release 构建输出目录（*.apk 之外还含 output-metadata.json、baselineProfiles）
+app/release/
+
 # 签名凭据与密钥库（禁止入库）
 key.properties
 keystore/
 *.jks
+
+# AI 助手工作区（项目笔记等本地数据，不入库）
+.workbuddy/
