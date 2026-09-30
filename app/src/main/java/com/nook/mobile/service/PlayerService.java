@@ -250,6 +250,16 @@ public final class PlayerService extends Service {
         return currentGame;
     }
 
+    /** 当前播放的友好名（null=未在播放）；供界面重建/回到前台时恢复"playing …"文案。 */
+    public String getPlayingFriendlyName() {
+        return lastFriendly;
+    }
+
+    /** 当前播放的小时/曲名，配合 {@link #getPlayingFriendlyName()} 使用。 */
+    public String getPlayingHourText() {
+        return lastHourText;
+    }
+
     /**
      * 用户首次点击“开始”后启动播放（§7.2）：
      * 播雨声底噪 → 启动 5s 轮询与整点闹钟 → 立即 timeCheck 播当前小时。

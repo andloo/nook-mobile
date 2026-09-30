@@ -335,12 +335,18 @@ public final class MainActivity extends AppCompatActivity {
         selectGame(selected);
     }
 
+    /**
+     * 与服务状态对齐。
+     * <p>"playing …" 文案只在播放变化时由服务推送，界面重建（从桌面重新打开）或从其它页面
+     * 回到主界面时不会自动补发，这里主动拉取一次，避免文案停留在空文本。
+     */
     private void syncFromService() {
         if (service == null) {
             return;
         }
         updatePauseButton(service.isPaused());
         selectGame(service.getCurrentGame());
+        uiCallback.onPlayingChanged(service.getPlayingFriendlyName(), service.getPlayingHourText());
     }
 
     private void selectGame(String game) {
