@@ -130,8 +130,8 @@ public final class BeepSynth {
         if (!ensureTrack(samples * 2)) {
             return;
         }
-        // MODE_STATIC 下重写数据前必须先停止当前播放
-        stopTrack();
+        // 复用静态轨道：先停止并把播放头回卷到缓冲起点，否则 play() 不会从头重放（表现为无声）
+        rewindTrack();
         int attack = SAMPLE_RATE * 5 / 1000;
         int release = SAMPLE_RATE * 60 / 1000;
         for (int i = 0; i < samples; i++) {
@@ -150,7 +150,11 @@ public final class BeepSynth {
         track.play();
     }
 
-    /** 按需创建/复用静态轨道与 PCM 缓冲；返回 false 表示轨道创建失败。 */
+    /**
+     * 按需创建/复用静态轨道与 PCM 缓冲；返回 false 表示轨道创建失败。
+     * <p>注意：MODE_STATIC 轨道新建后 state 为 {@link AudioTrack#STATE_NO_STATIC_DATA}，
+     * 首次 write() 成功后才变为 STATE_INITIALIZED，因此「创建失败」只能用 STATE_UNINITIALIZED 判定。
+     */
     private boolean ensureTrack(int bytes) {
         if (track != null && trackBytes == bytes) {
             return true;
@@ -169,7 +173,7 @@ public final class BeepSynth {
                 .setTransferMode(AudioTrack.MODE_STATIC)
                 .setBufferSizeInBytes(bytes)
                 .build();
-        if (t.getState() != AudioTrack.STATE_INITIALIZED) {
+        if (t.getState() == AudioTrack.STATE_UNINITIALIZED) {
             t.release();
             return false;
         }
@@ -181,13 +185,29 @@ public final class BeepSynth {
 
     /** 停止当前发声（保留轨道供复用）。 */
     private void stopTrack() {
-        if (track != null) {
-            try {
-                track.stop();
-            } catch (IllegalStateException e) {
-                // 未初始化或已释放，忽略
-            }
+        if (track == null || track.getState() != AudioTrack.STATE_INITIALIZED) {
+            // 新轨道尚无静态数据，stop() 会抛 IllegalStateException
+            return;
         }
+        try {
+            track.stop();
+        } catch (IllegalStateException e) {
+            // 未初始化或已释放，忽略
+        }
+    }
+
+    /** 停止当前发声并把静态缓冲的播放头回卷到起点（复用轨道重放必需，否则 play() 无声）。 */
+    private void rewindTrack() {
+        if (track == null || track.getState() != AudioTrack.STATE_INITIALIZED) {
+            // 新轨道尚无静态数据：stop() 会抛 IllegalStateException，reloadStaticData() 无效
+            return;
+        }
+        try {
+            track.stop();
+        } catch (IllegalStateException e) {
+            return;
+        }
+        track.reloadStaticData();
     }
 
     /** 释放轨道与 PCM 缓冲（页面销毁时调用）。 */
