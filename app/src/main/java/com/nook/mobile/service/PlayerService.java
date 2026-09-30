@@ -21,7 +21,12 @@ import android.os.IBinder;
 import android.os.Looper;
 import android.util.Log;
 
+import android.support.v4.media.MediaMetadataCompat;
+import android.support.v4.media.session.MediaSessionCompat;
+import android.support.v4.media.session.PlaybackStateCompat;
+
 import androidx.core.app.NotificationCompat;
+import androidx.media.app.NotificationCompat.MediaStyle;
 
 import com.nook.mobile.R;
 import com.nook.mobile.alarm.HourChangeReceiver;
@@ -54,6 +59,9 @@ import java.util.concurrent.TimeUnit;
 public final class PlayerService extends Service {
 
     public static final String ACTION_TIME_CHECK = "com.nook.mobile.action.TIME_CHECK";
+
+    /** 通知栏/锁屏「播放暂停」按钮动作（与主界面按钮同一行为）。 */
+    public static final String ACTION_TOGGLE_PAUSE = "com.nook.mobile.action.TOGGLE_PAUSE";
 
     private static final String TAG = "PlayerService";
     private static final String CHANNEL_ID = "nook_playback";
@@ -109,6 +117,7 @@ public final class PlayerService extends Service {
 
     private AudioManager audioManager;
     private AudioFocusRequest focusRequest;
+    private MediaSessionCompat mediaSession;
 
     private UiCallback ui;
 
@@ -128,7 +137,7 @@ public final class PlayerService extends Service {
 
     private Runnable tick;
 
-    /** 通知大图标位图缓存（服务内复用，避免每次刷新通知都新建位图）。 */
+    /** 通知/锁屏大图标位图缓存（服务内复用，避免每次刷新通知都新建位图）。 */
     private Bitmap largeIcon;
 
     /** K.K. 启用列表缓存：仅在歌单保存后失效（避免每次整点选曲都 Gson 解析 + 拷贝）。 */
@@ -173,14 +182,20 @@ public final class PlayerService extends Service {
         engine.setMusicVolume(settings.getSoundVol() / 100f);
         engine.setRainVolume(settings.getRainVol() / 100f);
         createChannel();
+        createMediaSession();
     }
 
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
         // startForegroundService 后必须尽快 startForeground
         startForeground(NOTIFICATION_ID, buildNotification(lastFriendly, lastHourText));
-        final boolean isTimeCheck = intent != null && ACTION_TIME_CHECK.equals(intent.getAction());
-        if (isTimeCheck && started) {
+        syncMediaSession(lastFriendly, lastHourText);
+        final String action = intent != null ? intent.getAction() : null;
+        final boolean isTimeCheck = ACTION_TIME_CHECK.equals(action);
+        if (ACTION_TOGGLE_PAUSE.equals(action)) {
+            // 通知栏/锁屏的播放暂停按钮：与主界面按钮同一入口（含恢复播放流程）
+            togglePause();
+        } else if (isTimeCheck && started) {
             timeCheck();
             if (!paused) {
                 // 暂停中不续订整点闹钟（恢复播放时会重新安排）
@@ -205,6 +220,11 @@ public final class PlayerService extends Service {
         stopTick();
         cancelHourAlarm();
         abandonFocus();
+        if (mediaSession != null) {
+            mediaSession.setActive(false);
+            mediaSession.release();
+            mediaSession = null;
+        }
         chime.release();
         engine.release();
         ioExecutor.shutdownNow();
@@ -277,6 +297,8 @@ public final class PlayerService extends Service {
         scheduleHourAlarm();
         timeCheck();
         notifyPause();
+        // 立即把通知/锁屏按钮切到「暂停」态（曲目加载完成后再更新为具体曲名）
+        updateNotification(null, null);
     }
 
     /** 手动切换游戏模式（FR-03）：持久化并以当前小时立即重播。 */
@@ -393,6 +415,8 @@ public final class PlayerService extends Service {
             startTick();
             scheduleHourAlarm();
             timeCheck();
+            // 立即把通知/锁屏按钮切到「暂停」态（曲目加载完成后再更新为具体曲名）
+            updateNotification(null, null);
         }
         notifyPause();
     }
@@ -744,30 +768,94 @@ public final class PlayerService extends Service {
         }
     }
 
-    /** 媒体通知文案对齐桌面版托盘：playing {友好名} ({hour})! / playing nothing!（FR-70 替代）。 */
-    private Notification buildNotification(String friendlyName, String hourText) {
-        String text = friendlyName != null
+    /**
+     * 创建媒体会话：向锁屏与系统媒体控制区提供「播放/暂停」控件与当前曲目信息。
+     * 播放状态由本服务的 paused 状态驱动（暂停=停止全部音频），不绑定某个播放器实例。
+     */
+    private void createMediaSession() {
+        mediaSession = new MediaSessionCompat(this, "nook_playback");
+        mediaSession.setCallback(new MediaSessionCompat.Callback() {
+            @Override
+            public void onPlay() {
+                // 与主界面按钮同一入口；转 post 派发，避免在会话回调里重入会话方法
+                handler.post(() -> setPaused(false));
+            }
+
+            @Override
+            public void onPause() {
+                handler.post(() -> setPaused(true));
+            }
+        });
+        Intent open = new Intent(this, MainActivity.class);
+        mediaSession.setSessionActivity(PendingIntent.getActivity(this, 0, open,
+                PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE));
+        mediaSession.setActive(true);
+    }
+
+    /** 同步媒体会话的播放状态与元数据（锁屏/系统媒体控制区展示用）。 */
+    private void syncMediaSession(String friendlyName, String hourText) {
+        if (mediaSession == null) {
+            return;
+        }
+        mediaSession.setMetadata(new MediaMetadataCompat.Builder()
+                .putString(MediaMetadataCompat.METADATA_KEY_TITLE, playingText(friendlyName, hourText))
+                .build());
+        mediaSession.setPlaybackState(new PlaybackStateCompat.Builder()
+                .setActions(PlaybackStateCompat.ACTION_PLAY
+                        | PlaybackStateCompat.ACTION_PAUSE
+                        | PlaybackStateCompat.ACTION_PLAY_PAUSE)
+                .setState(started && !paused
+                                ? PlaybackStateCompat.STATE_PLAYING
+                                : PlaybackStateCompat.STATE_PAUSED,
+                        PlaybackStateCompat.PLAYBACK_POSITION_UNKNOWN, 1f)
+                .build());
+    }
+
+    /** 通知与锁屏共用的播放文案（对齐桌面版托盘）。 */
+    private static String playingText(String friendlyName, String hourText) {
+        return friendlyName != null
                 ? "playing " + friendlyName + " (" + hourText + ")!"
                 : "playing nothing!";
+    }
+
+    /** 精简媒体通知：大图标 + 播放文案 + 播放暂停按钮（不设进度条/额外按钮）。 */
+    private Notification buildNotification(String friendlyName, String hourText) {
         Intent open = new Intent(this, MainActivity.class);
         PendingIntent content = PendingIntent.getActivity(this, 0, open,
                 PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
+
+        // 播放暂停按钮：点击后由 PlayerService 执行 togglePause()（与主界面按钮同一行为）
+        Intent toggle = new Intent(this, PlayerService.class).setAction(ACTION_TOGGLE_PAUSE);
+        PendingIntent toggleIntent = PendingIntent.getForegroundService(this, 1, toggle,
+                PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
+        boolean showPlay = paused; // 暂停中显示「播放」，播放中显示「暂停」（与主界面按钮文案一致）
+        NotificationCompat.Action toggleAction = new NotificationCompat.Action.Builder(
+                showPlay ? R.drawable.ic_play : R.drawable.ic_pause,
+                showPlay ? "Play" : "Pause", toggleIntent).build();
+
+        // MediaStyle + 会话令牌：使锁屏媒体区 / 系统媒体控制区能显示播放暂停控件
+        MediaStyle style = new MediaStyle().setShowActionsInCompactView(0);
+        if (mediaSession != null) {
+            style.setMediaSession(mediaSession.getSessionToken());
+        }
+
         return new NotificationCompat.Builder(this, CHANNEL_ID)
                 .setSmallIcon(R.drawable.ic_notification)
                 .setLargeIcon(largeIcon())
-                .setContentTitle(getString(R.string.app_name))
-                .setContentText(text)
+                .setContentTitle(playingText(friendlyName, hourText))
                 .setContentIntent(content)
                 .setOngoing(true)
                 .setOnlyAlertOnce(true)
+                .setShowWhen(false)
                 .setCategory(NotificationCompat.CATEGORY_TRANSPORT)
                 .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+                .addAction(toggleAction)
+                .setStyle(style)
                 .build();
     }
 
-    /** 通知展开态大图标：直接使用参考图（独立资源，避免 adaptive 蒙版影响）。 */
+    /** 通知/锁屏大图标：直接使用参考图（独立资源，避免 adaptive 蒙版影响），服务内只渲染一次。 */
     private Bitmap largeIcon() {
-        // 服务生命周期内只渲染一次，避免每次刷新通知（或重启前台服务）都新建位图
         if (largeIcon == null) {
             Drawable d = getDrawable(R.drawable.ic_notification_large);
             if (d == null) {
@@ -783,6 +871,7 @@ public final class PlayerService extends Service {
     }
 
     private void updateNotification(String friendlyName, String hourText) {
+        syncMediaSession(friendlyName, hourText);
         NotificationManager nm = getSystemService(NotificationManager.class);
         if (nm != null) {
             nm.notify(NOTIFICATION_ID, buildNotification(friendlyName, hourText));
